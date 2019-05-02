@@ -4,38 +4,27 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 
 	auth "github.com/abbot/go-http-auth"
-
+	"github.com/kamatama41/tenhou-mjlog-downloader/crawler"
+	"github.com/kamatama41/tenhou-mjlog-downloader/env"
 	"golang.org/x/crypto/bcrypt"
 )
 
 var (
-	basicUser string
-	basicPass string
-	port      string
+	basicUser   string
+	basicPass   string
+	port        string
+	userName    string
+	storageType string
 )
 
 func init() {
-	basicUser = getEnv("BASIC_AUTH_USER")
-	basicPass = getEnv("BASIC_AUTH_PASSWORD")
-	port = getEnvOrDefault("PORT", "8080")
-}
-
-func getEnvOrDefault(key, fallback string) string {
-	if v, ok := os.LookupEnv(key); ok {
-		return v
-	}
-	return fallback
-}
-
-func getEnv(key string) string {
-	if v, ok := os.LookupEnv(key); ok {
-		return v
-	}
-	log.Fatalf("Env %s must be sed but not found.", key)
-	return ""
+	basicUser = env.Get("BASIC_AUTH_USER")
+	basicPass = env.Get("BASIC_AUTH_PASSWORD")
+	port = env.GetOrDefault("PORT", "8080")
+	userName = env.Get("TENHOU_USER_NAME")
+	storageType = env.GetOrDefault("STORAGE_TYPE", "local")
 }
 
 func secret(user, realm string) string {
@@ -52,13 +41,21 @@ func main() {
 	crawlHandler := func(w http.ResponseWriter, req *auth.AuthenticatedRequest) {
 		switch req.Method {
 		case "POST":
-			err := crawl()
+			c, err := crawler.New(userName, storageType)
 			if err != nil {
 				log.Println(err)
 				http.Error(w, "Internal server error", http.StatusInternalServerError)
-			} else {
-				fmt.Fprint(w, "OK")
+				return
 			}
+
+			err = c.Crawl()
+			if err != nil {
+				log.Println(err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+
+			fmt.Fprint(w, "OK")
 		default:
 			http.Error(w, "Not found", http.StatusNotFound)
 		}
