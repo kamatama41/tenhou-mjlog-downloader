@@ -1,2 +1,4 @@
 # tenhou-mjlog-downloader
-A Heroku app to periodically get mjlogs and a store cloud storage.
+A web app to correct mjlogs and store them into a cloud storage.
+
+天鳳の牌譜(mjlog)を集めてDropboxに保存するweb API
