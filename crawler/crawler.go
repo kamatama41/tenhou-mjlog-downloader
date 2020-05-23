@@ -11,6 +11,7 @@ import (
 	"time"
 
 	fs "github.com/kamatama41/tenhou-mjlog-downloader/file_storage"
+	"github.com/kamatama41/tenhou-mjlog-downloader/twitter"
 )
 
 var (
@@ -21,15 +22,11 @@ type crawler struct {
 	userName    string
 	storageType string
 	storage     fs.FileStorage
+	twitterCli  twitter.Client
 }
 
-type result struct {
-	f string
-	e error
-}
-
-func (c *crawler) getFiles(fileNames chan string) error {
-	defer close(fileNames)
+func (c *crawler) getFiles(chFileName chan<- string) error {
+	defer close(chFileName)
 
 	netClient := &http.Client{
 		Timeout: time.Second * 10,
@@ -48,25 +45,25 @@ func (c *crawler) getFiles(fileNames chan string) error {
 	}
 
 	for _, value := range regDownloadLink.FindAllStringSubmatch(string(bytes), -1) {
-		fileNames <- value[1]
+		chFileName <- value[1]
 	}
 	return nil
 }
 
-func (c *crawler) processFiles(fileNames chan string, resultChan chan result, wg *sync.WaitGroup) {
+func (c *crawler) processFiles(chFileName <-chan string, chErrFile chan string, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	netClient := &http.Client{
 		Timeout: time.Second * 10,
 	}
 
-	for fileName := range fileNames {
+	for fileName := range chFileName {
 		path := c.storage.GetPath(fmt.Sprintf("%s.mjlog", fileName))
 		log.Printf("Start processing %s", path)
 		exists, err := c.storage.Exists(path)
 		if err != nil {
-			log.Print(err)
-			resultChan <- result{f: fileName, e: err}
+			log.Printf("Failed to check existence (%s): %v", fileName, err)
+			chErrFile <- fileName
 			continue
 		}
 		if exists {
@@ -74,57 +71,69 @@ func (c *crawler) processFiles(fileNames chan string, resultChan chan result, wg
 		} else {
 			response, err := netClient.Get(fmt.Sprintf("https://tenhou.net/0/log/find.cgi?log=%s", fileName))
 			if err != nil {
-				log.Print(err)
-				resultChan <- result{f: fileName, e: err}
+				log.Printf("Failed to get mjlog (%s): %v", fileName, err)
+				chErrFile <- fileName
 				continue
 			}
 			log.Println(fmt.Sprintf("Try saving %s into %s", path, c.storageType))
 			if err := c.storage.Save(path, response.Body); err != nil {
-				log.Print(err)
-				resultChan <- result{f: fileName, e: err}
+				log.Printf("Failed to save file (%s): %v", fileName, err)
+				chErrFile <- fileName
+				continue
+			}
+
+			url := fmt.Sprintf("http://tenhou.net/0/?log=%s", fileName)
+			log.Printf("Tweet %s", url)
+			if err := c.twitterCli.Tweet(url); err != nil {
+				log.Printf("Failed to tweet (%s): %v", fileName, err)
+				chErrFile <- fileName
 				continue
 			}
 		}
 	}
 }
 
-func correctErrorFiles(resultChan chan result, errorFiles *[]string) {
-	for result := range resultChan {
-		*errorFiles = append(*errorFiles, result.f)
-	}
-}
-
 func (c *crawler) Crawl() error {
 	log.Print("Start crawling..")
-	fileNames := make(chan string, 1)
-	wg := sync.WaitGroup{}
-	resultChan := make(chan result)
+	chFileName := make(chan string)
+	var wg sync.WaitGroup
+	chErrFile := make(chan string)
 
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
-		go c.processFiles(fileNames, resultChan, &wg)
+		go c.processFiles(chFileName, chErrFile, &wg)
 	}
 
-	err := c.getFiles(fileNames)
+	err := c.getFiles(chFileName)
 	if err != nil {
 		return err
 	}
 
 	var errorFiles []string
-	go correctErrorFiles(resultChan, &errorFiles)
-	wg.Wait()
-	close(resultChan)
+	var wgErr sync.WaitGroup
+	wgErr.Add(1)
+	go func() {
+		defer wgErr.Done()
+		for errorFile := range chErrFile {
+			errorFiles = append(errorFiles, errorFile)
+		}
+	}()
 
+	wg.Wait()
+	close(chErrFile)
+
+	wgErr.Wait()
 	if len(errorFiles) != 0 {
 		return fmt.Errorf("failed to process the files (%s)", strings.Join(errorFiles, ", "))
 	}
 	return nil
 }
 
-func New(userName, storageType string) (*crawler, error) {
+func New(userName, storageType string, twitterCli twitter.Client) (*crawler, error) {
 	c := new(crawler)
 	c.userName = userName
 	c.storageType = storageType
+	c.twitterCli = twitterCli
 	s, err := fs.New(storageType)
 	if err != nil {
 		return nil, err
