@@ -2,6 +2,8 @@ module github.com/kamatama41/tenhou-mjlog-downloader
 
 require (
 	github.com/abbot/go-http-auth v0.4.0
+	github.com/dghubble/go-twitter v0.0.0-20190719072343-39e5462e111f
+	github.com/dghubble/oauth1 v0.6.0
 	github.com/dropbox/dropbox-sdk-go-unofficial v5.4.0+incompatible
 	golang.org/x/crypto v0.0.0-20190426145343-a29dc8fdc734
 	golang.org/x/net v0.0.0-20190424112056-4829fb13d2c6 // indirect
