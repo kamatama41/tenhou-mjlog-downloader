@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kamatama41/tenhou-go"
 	fs "github.com/kamatama41/tenhou-mjlog-downloader/file_storage"
 	"github.com/kamatama41/tenhou-mjlog-downloader/twitter"
 )
@@ -75,16 +77,37 @@ func (c *crawler) processFiles(chFileName <-chan string, chErrFile chan string, 
 				chErrFile <- fileName
 				continue
 			}
-			log.Println(fmt.Sprintf("Try saving %s into %s", path, c.storageType))
-			if err := c.storage.Save(path, response.Body); err != nil {
+			var bs []byte
+			func() {
+				defer response.Body.Close()
+
+				log.Println(fmt.Sprintf("Try saving %s into %s", path, c.storageType))
+				bs, err = ioutil.ReadAll(response.Body)
+				if err != nil {
+					log.Printf("Failed to read response (%s): %v", fileName, err)
+					chErrFile <- fileName
+				}
+			}()
+
+			if err := c.storage.Save(path, bytes.NewBuffer(bs)); err != nil {
 				log.Printf("Failed to save file (%s): %v", fileName, err)
 				chErrFile <- fileName
 				continue
 			}
 
-			url := fmt.Sprintf("http://tenhou.net/0/?log=%s", fileName)
-			log.Printf("Tweet %s", url)
-			if err := c.twitterCli.Tweet(url); err != nil {
+			mjlog, err := tenhou.Unmarshal(bytes.NewBuffer(bs))
+			if err != nil {
+				chErrFile <- fileName
+				continue
+			}
+			msg := fmt.Sprintf("http://tenhou.net/0/?log=%s\n", fileName)
+			msg += fmt.Sprintf("%s\n", mjlog.GameInfo.Name())
+			for _, res := range mjlog.GetResult().Sort() {
+				msg += fmt.Sprintf("%s %d (%s)\n", mjlog.Players[res.Player].Name, res.Ten, res.Point)
+			}
+
+			log.Printf("Tweet %s", msg)
+			if err := c.twitterCli.Tweet(msg); err != nil {
 				log.Printf("Failed to tweet (%s): %v", fileName, err)
 				chErrFile <- fileName
 				continue
